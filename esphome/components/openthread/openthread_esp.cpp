@@ -1,6 +1,11 @@
 #include "esphome/core/defines.h"
 #if defined(USE_OPENTHREAD) && defined(USE_ESP_IDF)
 #include <openthread/logging.h>
+#include <openthread/instance.h>
+#include <openthread/ip6.h>
+#include <openthread/joiner.h>
+#include "openthread/thread.h"
+
 #include "openthread.h"
 
 #include "esp_log.h"
@@ -10,6 +15,7 @@
 #include "esp_task_wdt.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/application.h"
 
 #include "esp_err.h"
 #include "esp_event.h"
@@ -55,6 +61,59 @@ static esp_netif_t *init_openthread_netif(const esp_openthread_platform_config_t
   ESP_ERROR_CHECK(esp_netif_attach(netif, esp_openthread_netif_glue_init(config)));
 
   return netif;
+}
+
+static void openthread_joiner_cb(otError error, void *ctx) {
+  otInstance *instance = (otInstance *) ctx;
+
+  if (error == OT_ERROR_NONE) {
+    ESP_LOGI(TAG, "Commissioning succeeded, enabling Thread...");
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    otError err = otThreadSetEnabled(instance, true);
+    esp_openthread_lock_release();
+
+    if (err != OT_ERROR_NONE) {
+      ESP_LOGE(TAG, "otThreadSetEnabled failed: %d", err);
+    } else {
+      ESP_LOGI(TAG, "Thread attached (or attaching).");
+    }
+  } else {
+    ESP_LOGE(TAG, "Commissioning failed: %d", error);
+  }
+}
+
+static esp_err_t init_openthread_joiner(otInstance *instance, const char *pskd) {
+  // Enable IPv6 before bringing Thread up
+  esp_openthread_lock_acquire(portMAX_DELAY);
+  otIp6SetEnabled(instance, true);
+  esp_openthread_lock_release();
+
+  // Optionally erase previous credentials to force re-commissioning
+  // esp_openthread_lock_acquire(portMAX_DELAY);
+  // otInstanceErasePersistentInfo(instance);
+  // esp_openthread_lock_release();
+
+  // Start Joiner commissioning
+  esp_openthread_lock_acquire(portMAX_DELAY);
+  otError err = otJoinerStart(instance,
+                              pskd,                    // PSKd
+                              NULL,                    // provisioningUrl
+                              "ESPHome",               // vendorName
+                              App.get_name().c_str(),  // vendorModel
+                              "1.0",                   // vendorSwVersion
+                              NULL,                    // vendorData
+                              openthread_joiner_cb,    // callback
+                              instance                 // context passed to callback
+  );
+  esp_openthread_lock_release();
+
+  if (err != OT_ERROR_NONE) {
+    ESP_LOGE(TAG, "otJoinerStart failed: %d", err);
+    return ESP_FAIL;
+  }
+
+  ESP_LOGI(TAG, "Joiner started. Awaiting Commissioner admission...");
+  return ESP_OK;
 }
 
 void OpenThreadComponent::ot_main() {
@@ -141,6 +200,9 @@ void OpenThreadComponent::ot_main() {
   ESP_ERROR_CHECK(esp_openthread_auto_start(dataset.mLength > 0 ? &dataset : nullptr));
 
   esp_openthread_launch_mainloop();
+
+  otInstance *instance = esp_openthread_get_instance();
+  ESP_ERROR_CHECK(init_openthread_joiner(instance, CONFIG_OPENTHREAD_PSKD));
 
   // Clean up
   esp_openthread_deinit();

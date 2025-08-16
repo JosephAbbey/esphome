@@ -14,12 +14,14 @@ from .const import (
     CONF_DEVICE_TYPE,
     CONF_EXT_PAN_ID,
     CONF_FORCE_DATASET,
+    CONF_JOINER,
     CONF_MDNS_ID,
     CONF_MESH_LOCAL_PREFIX,
     CONF_NETWORK_KEY,
     CONF_NETWORK_NAME,
     CONF_PAN_ID,
     CONF_PSKC,
+    CONF_PSKD,
     CONF_SRP_ID,
     CONF_TLV,
 )
@@ -49,7 +51,10 @@ def set_sdkconfig_options(config):
 
     add_idf_sdkconfig_option("CONFIG_OPENTHREAD_ENABLED", True)
 
-    if tlv := config.get(CONF_TLV):
+    if pskd := config.get(CONF_PSKD):
+        add_idf_sdkconfig_option("CONFIG_OPENTHREAD_JOINER", True)
+        add_idf_sdkconfig_option("CONFIG_OPENTHREAD_PSKD", f"{pskd:X}".lower())
+    elif tlv := config.get(CONF_TLV):
         cg.add_define("USE_OPENTHREAD_TLVS", tlv)
     else:
         if pan_id := config.get(CONF_PAN_ID):
@@ -117,9 +122,10 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_FORCE_DATASET): cv.boolean,
             cv.Optional(CONF_TLV): cv.string_strict,
+            cv.Optional(CONF_PSKD): cv.string_strict,
         }
     ).extend(_CONNECTION_SCHEMA),
-    cv.has_exactly_one_key(CONF_NETWORK_KEY, CONF_TLV),
+    cv.has_exactly_one_key(CONF_NETWORK_KEY, CONF_TLV, CONF_JOINER),
     cv.only_with_esp_idf,
     only_on_variant(supported=[VARIANT_ESP32C6, VARIANT_ESP32H2]),
 )
